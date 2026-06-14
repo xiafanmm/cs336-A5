@@ -145,3 +145,21 @@ def compute_group_normalized_rewards(
     return advantages.flatten(), metadata
 
 
+def compute_policy_gradient_loss_on_policy(
+    raw_rewards_or_advantages: torch.Tensor,
+    policy_log_probs: torch.Tensor,
+    importance_reweighting_method: Literal["none", "noclip", "grpo", "gspo"] = "none",
+    old_log_probs: torch.Tensor | None = None,
+    cliprange: float | None = None,
+    
+    response_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if importance_reweighting_method != 'none':
+        raise ValueError("on_policy do not need reweighting method")
+    
+    per_token_loss = - raw_rewards_or_advantages.reshape(-1, 1) * policy_log_probs
+    if response_mask:
+        per_token_loss = per_token_loss * response_mask
+
+    metadata : dict[str, torch.Tensor] = {}
+    return per_token_loss, metadata
