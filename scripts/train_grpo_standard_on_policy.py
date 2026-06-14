@@ -1,17 +1,20 @@
 import argparse
+import json
 import os
 import random
 import re
 from dataclasses import dataclass
 
 import torch
-from datasets import load_dataset
 from torch.optim import AdamW
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from cs336_alignment.grpo import grpo_train_step
 
+
+DEFAULT_MODEL_NAME = "/mnt/workspace/models/allenai/OLMo-2-0425-1B"
+DEFAULT_TRAIN_FILE = "data/gsm8k/train.jsonl"
 
 ANSWER_RE = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
 
@@ -61,6 +64,27 @@ def build_prompt(question: str) -> str:
         f"Problem: {question}\n\n"
         "Solution:"
     )
+
+
+def load_gsm8k_examples(path: str) -> list[dict[str, str]]:
+    train_examples = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            ex = json.loads(line)
+            question = ex["question"]
+            answer = extract_gsm8k_answer(ex["answer"])
+
+            if answer is None:
+                continue
+
+            train_examples.append(
+                {
+                    "prompt": build_prompt(question),
+                    "ground_truth": answer,
+                }
+            )
+
+    return train_examples
 
 
 @torch.no_grad()
@@ -122,8 +146,10 @@ def generate_rollouts_hf(
 
 @dataclass
 class TrainConfig:
-    model_name: str = "allenai/OLMo-2-0425-1B"
+    model_name: str = DEFAULT_MODEL_NAME
     output_dir: str = "outputs/grpo_olmo_gsm8k"
+    train_file: str = DEFAULT_TRAIN_FILE
+    local_files_only: bool = True
 
     train_batch_prompts: int = 4
     group_size: int = 4
@@ -144,8 +170,10 @@ class TrainConfig:
 def parse_args() -> TrainConfig:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model_name", type=str, default="allenai/OLMo-2-0425-1B")
+    parser.add_argument("--model_name", type=str, default=DEFAULT_MODEL_NAME)
     parser.add_argument("--output_dir", type=str, default="outputs/grpo_olmo_gsm8k")
+    parser.add_argument("--train_file", type=str, default=DEFAULT_TRAIN_FILE)
+    parser.add_argument("--local_files_only", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--train_batch_prompts", type=int, default=4)
     parser.add_argument("--group_size", type=int, default=4)
@@ -177,7 +205,10 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        cfg.model_name,
+        local_files_only=cfg.local_files_only,
+    )
 
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -185,6 +216,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model_name,
         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        local_files_only=cfg.local_files_only,
     ).to(device)
 
     optimizer = AdamW(
@@ -192,24 +224,11 @@ def main():
         lr=cfg.lr,
     )
 
-    dataset = load_dataset("gsm8k", "main", split="train")
+    train_examples = load_gsm8k_examples(cfg.train_file)
+    if not train_examples:
+        raise ValueError(f"No usable GSM8K examples found in {cfg.train_file}")
 
-    train_examples = []
-    for ex in dataset:
-        question = ex["question"]
-        answer = extract_gsm8k_answer(ex["answer"])
-
-        if answer is None:
-            continue
-
-        train_examples.append(
-            {
-                "prompt": build_prompt(question),
-                "ground_truth": answer,
-            }
-        )
-
-    print(f"Loaded {len(train_examples)} GSM8K training examples.")
+    print(f"Loaded {len(train_examples)} GSM8K training examples from {cfg.train_file}.")
 
     pbar = tqdm(range(cfg.max_steps))
 
