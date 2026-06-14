@@ -254,6 +254,7 @@ def run_aggregate_loss_across_microbatch(
                                             loss_normalization,
                                             normalization_constant,)
 
+from cs336_alignment.grpo import grpo_train_step
 
 def run_grpo_train_step(
     model: torch.nn.Module,
@@ -341,7 +342,8 @@ def run_grpo_train_step(
                 Dict with metadata from the underlying loss call, gradient norm
                 before clipping, and any other statistics you might want to log.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    return grpo_train_step(**locals())
 
 
 """
