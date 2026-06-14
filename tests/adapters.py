@@ -118,7 +118,9 @@ def run_compute_rollout_rewards(
                 Reward statistics to log. At minimum, include the mean total
                 and format rewards over the rollout batch.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    from cs336_alignment.grpo import compute_rollout_rewards
+    return compute_rollout_rewards(reward_fn, rollout_responses, repeated_ground_truths)
 
 
 def run_compute_group_normalized_rewards(
@@ -157,7 +159,9 @@ def run_compute_group_normalized_rewards(
                 your choice of other statistics to log (e.g. mean, std, max/min
                 of rewards).
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    from cs336_alignment.grpo import compute_group_normalized_rewards
+    return compute_group_normalized_rewards(raw_rewards, group_size,baseline,advantage_eps,advantage_normalizer)
 
 
 def run_compute_policy_gradient_loss(

@@ -1,6 +1,10 @@
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 import torch.nn.functional as F
+import os
+from typing import Any, Callable, Literal
+
+
 def tokenize_prompt_and_output(
     prompt_strs: list[str],
     output_strs: list[str],
@@ -64,6 +68,80 @@ def get_response_log_probs(
         entropy = -torch.sum(probabilities * log_distribution, dim = -1)
         result["token_entropy"] = entropy
     return result
-            
-    
-    
+
+from typing import Callable
+import torch
+
+def compute_rollout_rewards(
+    reward_fn: Callable[[str, str], dict[str, float]],
+    rollout_responses: list[str],
+    repeated_ground_truths: list[str],
+) -> tuple[torch.Tensor, dict[str, float]]:
+    assert len(rollout_responses) == len(repeated_ground_truths)
+
+    reward_dicts = [
+        reward_fn(response, gt)
+        for response, gt in zip(rollout_responses, repeated_ground_truths)
+    ]
+
+    raw_rewards = torch.tensor(
+        [r["reward"] for r in reward_dicts],
+        dtype=torch.float32,
+    )
+
+    metadata = {
+        "reward_mean": raw_rewards.mean().item(),
+        "format_reward_mean": sum(r["format_reward"] for r in reward_dicts) / len(reward_dicts),
+        "answer_reward_mean": sum(r["answer_reward"] for r in reward_dicts) / len(reward_dicts),
+    }
+
+    return raw_rewards, metadata
+
+
+def compute_group_normalized_rewards(
+    raw_rewards: torch.Tensor,
+    group_size: int,
+    baseline: Literal["mean", "none"] = "mean",
+    advantage_eps: float = 1e-6,
+    advantage_normalizer: Literal["std", "none", "mean"] = "std",
+) -> tuple[torch.Tensor, dict[str, float]]:
+    assert raw_rewards.numel() % group_size == 0
+
+    grouped_rewards = raw_rewards.reshape(-1, group_size)
+    metadata: dict[str, float] = {}
+
+    # 1. baseline
+    if baseline == "mean":
+        group_baseline = grouped_rewards.mean(dim=-1, keepdim=True)
+        advantages = grouped_rewards - group_baseline
+    elif baseline == "none":
+        advantages = grouped_rewards
+    else:
+        raise ValueError(f"Unknown baseline: {baseline}")
+
+    # 2. normalizer
+    if advantage_normalizer == "std":
+        normalizer = advantages.std(dim=-1, keepdim=True)
+        advantages = advantages / (normalizer + advantage_eps)
+
+    elif advantage_normalizer == "mean":
+        # 注意：如果 baseline == "mean"，这里不应该对 advantages 求 mean
+        # 因为每组 advantages 的均值约等于 0
+        normalizer = grouped_rewards.mean(dim=-1, keepdim=True).abs()
+        advantages = advantages / (normalizer + advantage_eps)
+
+    elif advantage_normalizer == "none":
+        pass
+
+    else:
+        raise ValueError(f"Unknown advantage_normalizer: {advantage_normalizer}")
+
+    # 3. metadata
+    metadata["reward_mean"] = raw_rewards.mean().item()
+    metadata["reward_std"] = raw_rewards.std().item()
+    metadata["advantage_mean"] = advantages.mean().item()
+    metadata["advantage_std"] = advantages.std().item()
+
+    return advantages.flatten(), metadata
+
+
