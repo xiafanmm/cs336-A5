@@ -163,3 +163,20 @@ def compute_policy_gradient_loss_on_policy(
 
     metadata : dict[str, torch.Tensor] = {}
     return per_token_loss, metadata
+
+def aggregate_loss_across_microbatch(
+    per_token_policy_gradient_loss: torch.Tensor,
+    mask: torch.Tensor,
+    loss_normalization: Literal["sequence", "constant"] = "sequence",
+    normalization_constant: int | None = None,
+) -> torch.Tensor:
+    per_token_loss = per_token_policy_gradient_loss * mask
+    if loss_normalization == 'sequence':
+        loss = torch.sum(per_token_loss, dim = -1) / torch.sum(mask, dim=-1)
+    else:
+        assert normalization_constant != None
+        loss = torch.sum(per_token_loss, dim = -1) / normalization_constant
+    loss = loss.mean(dim=-1)
+    return loss
+
+
